@@ -1,4 +1,6 @@
 import { bridge } from "./bridge";
+import { message } from "./i18n";
+import type { Localized } from "./i18n";
 import type { Catalog, ChassisProbe, CoolerDevice, Effect, HardwareEvent, LightReading, Reply, Request, Service, Telemetry, TurboStatus } from "./types";
 
 class CommandQueue {
@@ -53,20 +55,20 @@ const effect = (brightness: number): Effect => ({ brightness, color: "#32D4FF", 
 
 interface Lighting {
   stage: "idle" | "starting" | "authorizing" | "ready";
-  feedback: string;
+  feedback: Localized;
   busy: boolean;
   actual: LightReading | null;
   keyboard: Effect;
   probe: ChassisProbe;
   chassis: Record<string, Effect>;
-  zoneFeedback: Record<string, string>;
+  zoneFeedback: Record<string, Localized>;
 }
 
 interface Cooler {
   connected: boolean;
   automatic: boolean;
   pending: string | null;
-  feedback: string;
+  feedback: Localized;
   devices: Record<string, CoolerDevice>;
   selected: string;
   connectedName: string;
@@ -76,8 +78,8 @@ interface Cooler {
   pumpDuty: number;
   fanDuty: number;
   lights: Record<string, { mode: string; color: string }>;
-  coolingSent: string;
-  lightsSent: string;
+  coolingSent: Localized;
+  lightsSent: Localized;
 }
 
 export interface TurboState {
@@ -253,10 +255,10 @@ export class HardwareController {
     this.cooler({ automatic: false });
   }
 
-  private retry(message: string, delay = 30_000) {
+  private retry(detail: string, delay = 30_000) {
     window.clearTimeout(this.retryTimer);
     const retry = this.state.cooler.automatic && !this.state.cooler.connected && !this.closing;
-    this.cooler({ feedback: retry ? `${message} · 将自动重试` : message });
+    this.cooler({ feedback: retry ? message("{message} · 将自动重试", { message: message(detail) }) : detail });
     if (retry) this.retryTimer = window.setTimeout(() => void this.findCooler(), delay);
   }
 
@@ -352,7 +354,8 @@ export class HardwareController {
     if (request?.action === "chassis") {
       const actual = reply.chassis;
       const mode = this.state.catalog?.chassis.find(({ id }) => id === actual?.name)?.label;
-      const feedback = reply.error || (actual ? `最近发送 · ${mode ?? actual.name} · ${actual.brightness}%` : "机身灯控未回复");
+      const feedback = reply.error || (actual ? message("最近发送 · {mode} · {brightness}%",
+        { mode: message(mode ?? actual.name), brightness: actual.brightness }) : "机身灯控未回复");
       this.lighting({ zoneFeedback: { ...this.state.lighting.zoneFeedback, [String(request.zone)]: feedback }, busy: false });
     } else if (reply.state) {
       this.lighting({ stage: "ready", actual: reply.state, busy: false,
@@ -389,12 +392,12 @@ export class HardwareController {
       const devices = reply.devices ?? {};
       const old = this.state.cooler.selected;
       const selected = old in devices ? old : Object.keys(devices)[0] ?? "";
-      this.cooler({ devices, selected, feedback: selected ? `已发现 ${Object.keys(devices).length} 台水冷箱` : "附近未发现水冷箱" });
+      this.cooler({ devices, selected, feedback: selected ? message("已发现 {count} 台水冷箱", { count: Object.keys(devices).length }) : "附近未发现水冷箱" });
       if (this.state.cooler.automatic && !this.closing) this.connectDiscovered(devices, action === "scan");
     } else if (reply.event === "connected") {
       this.preferredCooler = reply.path ?? this.state.cooler.selected;
-      this.cooler({ connected: true, connectedName: reply.name ?? "水冷箱", selected: this.preferredCooler,
-        feedback: `正在监测 ${reply.name ?? "水冷箱"}` });
+      this.cooler({ connected: true, connectedName: reply.name ?? "", selected: this.preferredCooler,
+        feedback: message("正在监测 {device}", { device: reply.name ?? message("水冷箱") }) });
     } else if (reply.event === "disconnected") {
       this.resetCooler();
       this.retry(reply.reason ?? "蓝牙连接已断开", 1000);
@@ -402,12 +405,14 @@ export class HardwareController {
       const { catalog } = this.state;
       if (reply.component === "pump") {
         const label = catalog?.pump.find(({ id }) => id === reply.value)?.label;
-        this.cooler({ coolingSent: `已发送水泵 ${label ?? reply.value} · ${reply.duty}%` });
+        this.cooler({ coolingSent: message("已发送水泵 {mode} · {duty}%", {
+          mode: label ? message(label) : reply.value, duty: reply.duty }) });
       } else if (reply.component === "fan") {
-        this.cooler({ coolingSent: `已发送箱体风扇 ${reply.value}%` });
+        this.cooler({ coolingSent: message("已发送箱体风扇 {duty}%", { duty: reply.value }) });
       } else if (reply.component === "lighting") {
         const label = catalog?.cooler_lights.find(({ id }) => id === reply.value)?.label;
-        this.cooler({ lightsSent: `已发送${reply.zone === "tank" ? "水箱灯" : "冷排灯"} · ${label ?? reply.value}` });
+        this.cooler({ lightsSent: message("已发送{zone} · {mode}", {
+          zone: message(reply.zone === "tank" ? "水箱灯" : "冷排灯"), mode: label ? message(label) : reply.value }) });
       }
       this.cooler({ feedback: "设备已接收请求" });
     } else {

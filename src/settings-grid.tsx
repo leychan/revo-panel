@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState } from "react";
 import type { KeyboardEvent, PointerEvent, ReactNode } from "react";
 import { GripVertical } from "lucide-react";
+import { useI18n } from "./i18n";
 
 const ids = ["power", "display", "gpu", "touchpad"] as const;
 const columns = ["left", "right"] as const;
@@ -44,6 +45,7 @@ function savedLayout(): Layout {
 }
 
 export function SettingsGrid({ cards }: { cards: Record<CardId, Card> }) {
+  const { t } = useI18n();
   const [layout, setLayout] = useState(savedLayout);
   const [preview, setPreview] = useState<{ source: CardId; target: Position | null; x: number; y: number } | null>(null);
   const [announcement, setAnnouncement] = useState("");
@@ -63,7 +65,7 @@ export function SettingsGrid({ cards }: { cards: Record<CardId, Card> }) {
     if (layout[target.column].indexOf(source) === index) return;
     next[target.column].splice(index, 0, source);
     setLayout(next);
-    setAnnouncement(`${cards[source].title}已移动到${target.column === "left" ? "左" : "右"}列第 ${index + 1} 项`);
+    setAnnouncement(t("{title}已移动到{column}列第 {index} 项", { title: cards[source].title, column: t(target.column === "left" ? "左" : "右"), index: index + 1 }));
     try { localStorage.setItem(storageKey, JSON.stringify(next)); } catch { /* 当前页面仍可排序。 */ }
     // 跨列时卡片会在另一列重新挂载，等布局更新后再恢复把手焦点。
     requestAnimationFrame(() => grid.current?.querySelector<HTMLButtonElement>(`[data-settings-card="${source}"] .settings-grip`)
@@ -184,7 +186,7 @@ export function SettingsGrid({ cards }: { cards: Record<CardId, Card> }) {
   }
 
   return <div className="detail-grid settings-grid" ref={grid} data-sorting={preview ? true : undefined}>
-    <span className="sr-only" id={instructions}>拖动标题可以换列或排序。按左右方向键换列，上下方向键在列内排序。</span>
+    <span className="sr-only" id={instructions}>{t("拖动标题可以换列或排序。按左右方向键换列，上下方向键在列内排序。")}</span>
     <span className="sr-only" role="status">{announcement}</span>
     {columns.map((column) => {
       const target = preview?.target?.column === column ? preview.target : null;
@@ -200,8 +202,8 @@ export function SettingsGrid({ cards }: { cards: Record<CardId, Card> }) {
             data-sort-insert={before === id ? "before" : after === id ? "after" : undefined}>
             <div className="section-heading" onPointerDown={(event) => startDrag(event, id)}>
               <div className="settings-card-title">
-                <button className="settings-grip" type="button" aria-label={`移动${title}`} aria-describedby={instructions}
-                  title="拖动或用方向键换列、排序" onKeyDown={(event) => moveFromKeyboard(event, id, column)}>
+                <button className="settings-grip" type="button" aria-label={t("移动{title}", { title })} aria-describedby={instructions}
+                  title={t("拖动或用方向键换列、排序")} onKeyDown={(event) => moveFromKeyboard(event, id, column)}>
                   <GripVertical size={17} />
                 </button>
                 <div><h2>{icon}{title}</h2><p>{description}</p></div>

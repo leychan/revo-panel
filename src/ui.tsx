@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import type { CSSProperties, ReactNode } from "react";
+import { useI18n } from "./i18n";
 
 export function Status({ children, tone = "quiet" }: { children: ReactNode; tone?: "good" | "quiet" | "warn" }) {
   return <span className={`status status--${tone}`}><i />{children}</span>;
@@ -8,8 +9,9 @@ export function Status({ children, tone = "quiet" }: { children: ReactNode; tone
 export function Slider({ label, value, min = 0, max, unit = "%", disabled, onChange }: {
   label: string; value: number; min?: number; max: number; unit?: string; disabled?: boolean; onChange: (value: number) => void;
 }) {
+  const { t } = useI18n();
   return <label className="slider-field">
-    <span className="slider-caption"><span>{label}</span><strong>{value}<small>{unit}</small></strong></span>
+    <span className="slider-caption"><span>{t(label)}</span><strong>{value}<small>{unit}</small></strong></span>
     <input type="range" min={min} max={max} value={value} disabled={disabled}
       style={{ "--fill": `${max > min ? (value - min) / (max - min) * 100 : 0}%` } as CSSProperties}
       onChange={(event) => onChange(Number(event.currentTarget.value))} />
@@ -19,21 +21,23 @@ export function Slider({ label, value, min = 0, max, unit = "%", disabled, onCha
 export function Choices<T extends string | number>({ label, options, value, disabled, onChange, compact = false }: {
   label: string; options: readonly { id: T; label: string }[]; value: T; disabled?: boolean; onChange: (value: T) => void; compact?: boolean;
 }) {
-  return <div className={`choices ${compact ? "choices--compact" : ""}`} role="group" aria-label={label}>
+  const { t } = useI18n();
+  return <div className={`choices ${compact ? "choices--compact" : ""}`} role="group" aria-label={t(label)}>
     {options.map((option) => <button key={option.id} type="button" aria-pressed={option.id === value}
       className={option.id === value ? "selected" : undefined} disabled={disabled}
-      onClick={() => { if (option.id !== value) onChange(option.id); }}>{option.label}</button>)}
+      onClick={() => { if (option.id !== value) onChange(option.id); }}>{t(option.label)}</button>)}
   </div>;
 }
 
 const presets = ["#32D4FF", "#95F2CA", "#C2AAF8", "#FF8DA0", "#FFD19A", "#F3F7F6"];
 
 export function ColorField({ title, value, disabled, colors = presets, onChange }: { title: string; value: string; disabled?: boolean; colors?: string[]; onChange: (color: string) => void }) {
-  return <div className="color-field" role="group" aria-label={title}>
-    {colors.map((color) => <button type="button" key={color} aria-label={`${title} ${color}`} title={color}
+  const { t } = useI18n();
+  return <div className="color-field" role="group" aria-label={t(title)}>
+    {colors.map((color) => <button type="button" key={color} aria-label={`${t(title)} ${color}`} title={color}
       aria-pressed={value.toUpperCase() === color} disabled={disabled} className="color-chip"
       style={{ "--color": color } as CSSProperties} onClick={() => { if (value.toUpperCase() !== color) onChange(color); }} />)}
-    <label className="color-custom" aria-label={`自定${title}`}>
+    <label className="color-custom" aria-label={t("自定{title}", { title: t(title) })}>
       <input type="color" value={value} disabled={disabled} onChange={(event) => onChange(event.currentTarget.value.toUpperCase())} />
       <span>{value.toUpperCase()}</span>
     </label>
@@ -43,6 +47,7 @@ export function ColorField({ title, value, disabled, colors = presets, onChange 
 export type Sample = { time: number; value: number };
 
 export function TemperatureChart({ samples, themeKey }: { samples: Sample[]; themeKey: string }) {
+  const { t } = useI18n();
   const canvas = useRef<HTMLCanvasElement>(null);
   useEffect(() => {
     const surface = canvas.current;
@@ -79,7 +84,8 @@ export function TemperatureChart({ samples, themeKey }: { samples: Sample[]; the
         context.stroke();
       }
       context.fillText("−60s", left, height - 3);
-      context.fillText("现在", right - 22, height - 3);
+      const now = t("现在");
+      context.fillText(now, right - context.measureText(now).width, height - 3);
       if (!samples.length) return;
       const end = samples[samples.length - 1].time;
       const points = samples.filter((sample) => end - sample.time <= 60_000)
@@ -110,6 +116,6 @@ export function TemperatureChart({ samples, themeKey }: { samples: Sample[]; the
     observer.observe(surface);
     draw();
     return () => observer.disconnect();
-  }, [samples, themeKey]);
-  return <canvas className="temperature-chart" aria-label="最近 60 秒的 CPU 封装温度" ref={canvas} />;
+  }, [samples, themeKey, t]);
+  return <canvas className="temperature-chart" aria-label={t("最近 60 秒的 CPU 封装温度")} ref={canvas} />;
 }

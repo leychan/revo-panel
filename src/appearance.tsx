@@ -3,6 +3,7 @@ import { Palette } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { native } from "./bridge";
 import { Choices, ColorField } from "./ui";
+import { useI18n } from "./i18n";
 
 type Mode = "dark" | "light" | "system";
 interface Appearance { mode: Mode; accent: string }
@@ -91,12 +92,16 @@ export function useAppearance() {
 }
 
 export function AppearanceSettings({ appearance, change }: { appearance: Appearance; change: (appearance: Appearance) => void }) {
+  const { t, preference, setPreference } = useI18n();
   return <section className="panel control-panel appearance-panel">
-    <div className="section-heading"><div><h2><Palette size={18} /> 外观</h2></div></div>
+    <div className="section-heading"><div><h2><Palette size={18} /> {t("外观")}</h2></div></div>
     <div className="appearance-fields">
-      <div><h3>明暗主题</h3><Choices label="明暗主题" options={choices} value={appearance.mode} compact
+      <div><h3>{t("语言")}</h3><Choices label="语言"
+        options={[{ id: "system", label: "跟随系统" }, { id: "zh-CN", label: "简体中文" }, { id: "en", label: "英文" }] as const}
+        value={preference} compact onChange={setPreference} /></div>
+      <div><h3>{t("明暗主题")}</h3><Choices label="明暗主题" options={choices} value={appearance.mode} compact
         onChange={(mode) => change({ ...appearance, mode })} /></div>
-      <div><h3>主题色</h3><ColorField title="主题色" colors={accents} value={appearance.accent}
+      <div><h3>{t("主题色")}</h3><ColorField title="主题色" colors={accents} value={appearance.accent}
         onChange={(accent) => change({ ...appearance, accent })} /></div>
     </div>
   </section>;

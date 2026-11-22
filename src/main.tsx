@@ -8,6 +8,7 @@ import { bridge, native } from "./bridge";
 import { previewHistory } from "./demo";
 import { ChassisPage, CoolerPage, KeyboardPage } from "./device-pages";
 import { HardwareController } from "./hardware";
+import { I18nProvider, useI18n } from "./i18n";
 import { cpuSensor, Overview, Sensors } from "./overview";
 import type { Page } from "./overview";
 import { SystemPage } from "./system-page";
@@ -28,6 +29,7 @@ const nav = ["overview", "sensors", "keyboard", "chassis", "cooler", "system"] a
 const hardware = new HardwareController();
 
 function App() {
+  const { language, t } = useI18n();
   const { appearance, setAppearance, themeKey } = useAppearance();
   const [page, setPage] = useState<Page>("overview");
   const [telemetry, setTelemetry] = useState<Telemetry | null>(null);
@@ -109,29 +111,29 @@ function App() {
     pane.current?.scrollTo({ top: 0 });
   }
 
-  const chassis = telemetry?.model.board_name ?? "等待机型信息";
-  const model = telemetry?.model.product_name ?? "本机设备";
+  const chassis = telemetry?.model.board_name ?? t("等待机型信息");
+  const model = telemetry?.model.product_name ?? t("本机设备");
   const lightingSupported = telemetry?.model.board_name === "YAOSHI Series-X6AR55xY" && !!telemetry?.lighting_usb.some(({ id }) => id === "048d:600b");
   return <div className="shell">
     <aside className="sidebar">
-      <div className="brand"><span className="brand-mark"><Activity size={22} strokeWidth={2.3} /></span><div><strong>RevoPanel</strong><small>Linux 控制台</small></div></div>
-      <nav aria-label="控制台导航">
+      <div className="brand"><span className="brand-mark"><Activity size={22} strokeWidth={2.3} /></span><div><strong>RevoPanel</strong><small>{t("Linux 控制台")}</small></div></div>
+      <nav aria-label={t("控制台导航")}>
         {nav.map((key) => {
           const { icon: Icon, label } = pages[key];
-          return <button className="nav-item" key={key} aria-label={label} aria-current={page === key ? "page" : undefined} onClick={() => navigate(key)}>
-            <Icon size={18} /><span>{label}</span>
+          return <button className="nav-item" key={key} aria-label={t(label)} aria-current={page === key ? "page" : undefined} onClick={() => navigate(key)}>
+            <Icon size={18} /><span>{t(label)}</span>
           </button>;
         })}
       </nav>
-      <div className="sidebar-device"><span className="live-indicator" /><div><strong>{model}</strong><span>{telemetry ? "本机设备" : "正在检测"}</span></div></div>
+      <div className="sidebar-device"><span className="live-indicator" /><div><strong>{model}</strong><span>{telemetry ? t("本机设备") : t("正在检测")}</span></div></div>
     </aside>
     <main className="workspace" ref={pane}>
       <header className="topbar"><span className="machine-path"><b>{telemetry?.model.sys_vendor ?? "Linux"}</b><i>/</i>{chassis}</span>
-        <Status tone={error ? "warn" : native && updated ? "good" : "quiet"}>{native ? error ? "读取异常" : updated ? "实时监测" : "正在启动" : "界面预览"}</Status>
+        <Status tone={error ? "warn" : native && updated ? "good" : "quiet"}>{native ? error ? t("读取异常") : updated ? t("实时监测") : t("正在启动") : t("界面预览")}</Status>
       </header>
       <div className="page-body">
-        <div className="page-title"><h1>{pages[page].title}</h1>{page === "overview" && <span className="update-time">更新于 <b>{updated ? new Date(updated).toLocaleTimeString("zh-CN", { hour12: false }) : "—"}</b></span>}</div>
-        {error && <p className="panel error" role="status">读取硬件状态失败 · {error}</p>}
+        <div className="page-title"><h1>{t(pages[page].title)}</h1>{page === "overview" && <span className="update-time">{t("更新于")} <b>{updated ? new Date(updated).toLocaleTimeString(language, { hour12: false }) : "—"}</b></span>}</div>
+        {error && <p className="panel error" role="status">{t("读取硬件状态失败 ·")} {t(error)}</p>}
         {page === "overview" && <Overview data={telemetry} load={load} samples={samples} dischargeSamples={dischargeSamples}
           themeKey={themeKey} hardware={state} navigate={navigate} />}
         {page === "sensors" && <Sensors telemetry={telemetry} />}
@@ -147,4 +149,4 @@ function App() {
   </div>;
 }
 
-createRoot(document.getElementById("root")!).render(<App />);
+createRoot(document.getElementById("root")!).render(<I18nProvider><App /></I18nProvider>);

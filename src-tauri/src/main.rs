@@ -359,6 +359,8 @@ fn main() -> ExitCode {
             start_hardware,
             send_hardware,
             stop_hardware,
+            desktop::system_language,
+            desktop::set_language,
             desktop::desktop_ready,
             desktop::finish_exit
         ])
