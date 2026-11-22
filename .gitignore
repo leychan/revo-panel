@@ -1,0 +1,14 @@
+.codegraph/
+__pycache__/
+node_modules/
+dist/
+src-tauri/target/
+src-tauri/gen/
+
+/.local-backup/
+/.agents/
+/.codex/
+/.aws/
+.env
+.env.*
+!.env.example
