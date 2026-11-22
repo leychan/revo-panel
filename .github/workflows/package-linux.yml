@@ -5,6 +5,11 @@ on:
     branches: ['**']
     tags: ['v*']
   workflow_dispatch:
+    inputs:
+      aur_release_tag:
+        description: '补发到 AUR 的现有 Release 标签，留空执行常规构建'
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -12,6 +17,7 @@ permissions:
 jobs:
   package:
     name: Linux x86_64
+    if: github.event_name != 'workflow_dispatch' || inputs.aur_release_tag == ''
     runs-on: ubuntu-24.04
     steps:
       - name: 检出源码
@@ -126,9 +132,15 @@ jobs:
 
   aur:
     name: 发布 AUR
-    if: github.event.repository.private == false
+    # 补发使用已发布的安装包，跳过本次工作流的构建和 GitHub Release。
+    if: >-
+      !cancelled() && github.event.repository.private == false &&
+      (needs.release.result == 'success' ||
+       (github.event_name == 'workflow_dispatch' && inputs.aur_release_tag != ''))
     needs: release
     runs-on: ubuntu-24.04
+    env:
+      AUR_RELEASE_TAG: ${{ inputs.aur_release_tag || github.ref_name }}
     concurrency:
       group: aur-revo-panel-bin
     steps:
@@ -137,16 +149,18 @@ jobs:
         env:
           AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
         run: |
-          if [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ && -n "$AUR_SSH_PRIVATE_KEY" ]]; then
+          if [[ "$AUR_RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ && -n "$AUR_SSH_PRIVATE_KEY" ]]; then
             echo 'enabled=true' >> "$GITHUB_OUTPUT"
           else
             echo 'AUR 只发布稳定版本，且需要配置 AUR_SSH_PRIVATE_KEY'
+            if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]]; then exit 1; fi
           fi
 
       - name: 检出版本源码
         if: steps.aur.outputs.enabled == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: refs/tags/${{ env.AUR_RELEASE_TAG }}
           persist-credentials: false
 
       - name: 生成 PKGBUILD 和 .SRCINFO
@@ -155,19 +169,20 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
-          version="${GITHUB_REF_NAME#v}"
+          version="${AUR_RELEASE_TAG#v}"
           # 从已发布的 Release 下载成品，AUR 校验的就是用户会下载的文件。
           deb="RevoPanel_${version}_amd64.deb"
-          gh release download "$GITHUB_REF_NAME" --pattern "$deb" --dir release-assets
+          gh release download "$AUR_RELEASE_TAG" --pattern "$deb" --dir release-assets
           if [[ $(dpkg-deb -f "release-assets/$deb" Version) != "$version" ]]; then
             echo '::error::Release 中的 .deb 版本与标签不一致'
             exit 1
           fi
           project_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY"
           bash packaging/aur/prepare.sh "release-assets/$deb" aur-package "$project_url" \
-            "$project_url/releases/download/$GITHUB_REF_NAME/$deb"
+            "$project_url/releases/download/$AUR_RELEASE_TAG/$deb"
+          # makepkg 即使只生成元数据，也会检查工作目录可写。
           docker run --rm --user "$(id -u):$(id -g)" \
-            -v "$PWD/aur-package:/pkg:ro" -w /pkg archlinux:base-devel \
+            -v "$PWD/aur-package:/pkg" -w /pkg archlinux:base-devel \
             makepkg --printsrcinfo > aur-package/.SRCINFO
 
       - name: 推送 AUR 更新
@@ -190,7 +205,7 @@ jobs:
           export GIT_SSH_COMMAND="ssh -i $ssh_dir/key -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$ssh_dir/known_hosts"
 
           git -c init.defaultBranch=master clone ssh://aur@aur.archlinux.org/revo-panel-bin.git aur-repo
-          version="${GITHUB_REF_NAME#v}"
+          version="${AUR_RELEASE_TAG#v}"
           if [[ -f aur-repo/.SRCINFO ]]; then
             existing=$(awk '$1 == "pkgver" {print $3; exit}' aur-repo/.SRCINFO)
             if [[ $(printf '%s\n' "$existing" "$version" | sort -V | tail -n 1) != "$version" ]]; then

@@ -51,7 +51,7 @@ Arch Linux 和 Manjaro 可下载 `.pkg.tar.zst`，用 `sudo pacman -U ./revo-pan
 
 1. 在仓库根目录添加 `LICENSE`，并在 `package.json` 的 `license` 填写对应的 SPDX 标识。
 2. 为 AUR 生成单独的 SSH 密钥，把公钥加到有权维护该包的 AUR 账号。首次发布时可用该账号提交尚未被占用的包名。 [AUR 提交流程](https://wiki.archlinux.org/title/AUR_submission_guidelines)
-3. 将可供 CI 使用的无口令私钥保存到 GitHub 仓库 **Settings → Secrets and variables → Actions**，命名为 `AUR_SSH_PRIVATE_KEY`。推送稳定版本标签，或重新运行已有标签的工作流，再到 **Actions** 查看 AUR 发布结果。
+3. 将可供 CI 使用的无口令私钥保存到 GitHub 仓库 **Settings → Secrets and variables → Actions**，命名为 `AUR_SSH_PRIVATE_KEY`。推送稳定版本标签后，到 **Actions** 查看 AUR 发布结果。补发已有 GitHub Release 时，在默认分支手动运行工作流，并把版本标签填入 `aur_release_tag`。
 
 ## 命令行诊断
 
