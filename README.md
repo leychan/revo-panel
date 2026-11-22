@@ -4,6 +4,18 @@
 
 RevoPanel is a Linux desktop control panel for MECHREVO laptops. It was first tested on the Yaoshi `X6AR55xY` with Manjaro and KDE Plasma.
 
+## Screenshots
+
+![Hardware overview with CPU temperatures, battery status, and coolant flow](docs/screenshots/overview.png)
+
+| Keyboard lighting | Chassis lighting |
+| --- | --- |
+| ![Keyboard effects, backlight brightness, and color controls](docs/screenshots/keyboard-lighting.png) | ![Chassis light bar controls and lid logo availability](docs/screenshots/chassis-lighting.png) |
+
+| External liquid cooler | System settings |
+| --- | --- |
+| ![Coolant flow, pump, fan, and lighting controls](docs/screenshots/liquid-cooler.png) | ![Language, appearance, power, and display settings](docs/screenshots/system-settings.png) |
+
 ## Install
 
 - **Arch Linux / Manjaro** Install [`revo-panel-bin`](https://aur.archlinux.org/packages/revo-panel-bin) from the AUR, or install the downloaded `.pkg.tar.zst` with `sudo pacman -U ./package.pkg.tar.zst`, using its actual filename.

@@ -4,6 +4,30 @@
 
 RevoPanel 是面向机械革命笔记本的 Linux 桌面控制台。首台验证机为耀世 `X6AR55xY`，使用 Manjaro 和 KDE Plasma。
 
+## 界面截图
+
+部分设备状态为演示值。
+
+### 硬件总览
+
+![硬件总览显示 CPU 温度、电池状态和水冷箱水流](docs/screenshots/zh-CN/overview.png)
+
+### 键盘灯光
+
+![键盘灯效、背光亮度和颜色调节](docs/screenshots/zh-CN/keyboard-lighting.png)
+
+### 机身灯光
+
+![前灯条调节和 A 面徽标状态](docs/screenshots/zh-CN/chassis-lighting.png)
+
+### 外置水冷箱
+
+![水流状态、水泵、风扇和灯光调节](docs/screenshots/zh-CN/liquid-cooler.png)
+
+### 系统设置
+
+![语言、外观、电源和内置屏幕设置](docs/screenshots/zh-CN/system-settings.png)
+
 ## 安装
 
 - **Arch Linux / Manjaro** 可从 AUR 安装 [`revo-panel-bin`](https://aur.archlinux.org/packages/revo-panel-bin)，也可以下载 `.pkg.tar.zst` 后用 `sudo pacman -U ./package.pkg.tar.zst` 安装，文件名以实际下载的为准。
