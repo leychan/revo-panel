@@ -52,6 +52,13 @@ class CommandQueue {
 }
 
 const effect = (brightness: number): Effect => ({ brightness, color: "#32D4FF", direction: 1, speed: 5, name: "static" });
+const turboPreferenceKey = "revo-panel.turbo-on-battery.v1";
+const controlAuthorization = "请在系统窗口中授权本次运行的灯控和睿频控制";
+
+function savedTurboPolicy() {
+  try { return localStorage.getItem(turboPreferenceKey) === "true"; }
+  catch { return false; }
+}
 
 interface Lighting {
   stage: "idle" | "starting" | "authorizing" | "ready";
@@ -86,6 +93,7 @@ export interface TurboState {
   stage: "idle" | "starting" | "authorizing" | "ready";
   busy: boolean;
   actual: TurboStatus | null;
+  preferred: boolean;
   feedback: string;
 }
 
@@ -97,6 +105,7 @@ export class HardwareController {
   private cancelListener?: () => void;
   private closing = false;
   private lightingAttempted = false;
+  private turboRestoreAttempted = false;
   private lightingSupported = false;
   private preferredCooler = "";
   private retryTimer = 0;
@@ -104,7 +113,7 @@ export class HardwareController {
   private coolerQueue = new CommandQueue((request) => this.send("cooler", request));
   private state: State = {
     catalog: null,
-    turbo: { stage: "idle", busy: false, actual: null, feedback: "" },
+    turbo: { stage: "idle", busy: false, actual: null, preferred: savedTurboPolicy(), feedback: "" },
     lighting: {
       stage: "idle", feedback: "正在识别灯控设备", busy: false, actual: null,
       keyboard: effect(25), probe: { zones: [], status: "pending" },
@@ -134,9 +143,18 @@ export class HardwareController {
   private cooler(patch: Partial<Cooler>) { this.publish({ cooler: { ...this.state.cooler, ...patch } }); }
   private turbo(patch: Partial<TurboState>) { this.publish({ turbo: { ...this.state.turbo, ...patch } }); }
 
+  private saveTurboPolicy(enabled: boolean) {
+    try { localStorage.setItem(turboPreferenceKey, String(enabled)); } catch { /* 本次运行仍可使用。 */ }
+  }
+
   setTurboPolicy = async (enabled: boolean) => {
     const { stage, busy } = this.state.turbo;
-    if (this.closing || busy || (stage !== "ready" && (stage !== "idle" || !enabled))) return;
+    if (this.closing || busy || (stage !== "ready" && stage !== "idle")) return;
+    if (stage === "idle" && !enabled) {
+      this.saveTurboPolicy(false);
+      this.turbo({ preferred: false, feedback: "自动限制已关闭" });
+      return;
+    }
     try {
       if (stage === "ready") {
         this.turbo({ busy: true, feedback: "正在更新睿频限制" });
@@ -172,8 +190,13 @@ export class HardwareController {
     }
   }
 
-  discoverLighting(telemetry: Telemetry) {
-    if (this.lightingAttempted || this.closing) return;
+  discoverControls(telemetry: Telemetry) {
+    if (this.closing) return;
+    if (!this.turboRestoreAttempted && telemetry.cpu_turbo_restricted != null) {
+      this.turboRestoreAttempted = true;
+      if (this.state.turbo.preferred) void this.setTurboPolicy(true);
+    }
+    if (this.lightingAttempted) return;
     const { model, lighting_usb } = telemetry;
     this.lightingSupported = model.sys_vendor === "MECHREVO" && model.board_name === "YAOSHI Series-X6AR55xY"
       && lighting_usb.some(({ id }) => id === "048d:600b");
@@ -313,7 +336,7 @@ export class HardwareController {
       this.cooler({ devices: {}, selected: "" });
       this.retry(data.detail || "水冷箱助手已退出");
     } else if (data.code === 77 && this.state.lighting.stage === "starting" && !this.closing) {
-      this.lighting({ stage: "authorizing", feedback: "请在系统窗口中授权本次运行的灯控" });
+      this.lighting({ stage: "authorizing", feedback: controlAuthorization });
       void bridge.start("lighting", true).catch((error: unknown) => this.lighting({ stage: "idle", feedback: String(error) }));
     } else {
       this.lightQueue.clear();
@@ -329,10 +352,10 @@ export class HardwareController {
       const feedback = !enabled ? "自动限制已关闭" : power_source === "external" ? "外接电源，使用系统睿频设置"
         : power_source === "battery" ? (restricted ? "电池供电，睿频已限制" : "电池供电，当前由系统控制睿频")
         : "供电来源未知，使用系统睿频设置";
-      this.turbo({ stage: "ready", busy: false, actual: data.turbo, feedback });
+      if (enabled !== this.state.turbo.preferred) this.saveTurboPolicy(enabled);
+      this.turbo({ stage: "ready", busy: false, actual: data.turbo, preferred: enabled, feedback });
     } else if (data.code === 77 && this.state.turbo.stage === "starting" && !this.closing) {
-      // 首次缺少写权限时才请求授权。本次运行内切换开关复用已打开的句柄。
-      this.turbo({ stage: "authorizing", feedback: "请在系统窗口中授权本次睿频控制" });
+      this.turbo({ stage: "authorizing", feedback: controlAuthorization });
       void bridge.start("turbo", true).catch((error: unknown) =>
         this.turbo({ stage: "idle", busy: false, feedback: String(error) }));
     } else {
@@ -441,16 +464,19 @@ export class HardwareController {
   async close() {
     if (this.closing) return;
     this.closing = true;
-    const stopTurbo = Promise.allSettled([bridge.stop("turbo")]);
     this.pauseCooler();
     this.lightQueue.flush();
     this.coolerQueue.flush();
     // 关闭窗口前交付已经排队的设置。蓝牙搜索等操作有自己的超时。
     const deadline = Date.now() + 12_000;
-    while ((!this.lightQueue.idle || !this.coolerQueue.idle || this.state.turbo.stage !== "idle") && Date.now() < deadline) {
+    while ((!this.lightQueue.idle || !this.coolerQueue.idle) && Date.now() < deadline) {
       await new Promise((resolve) => window.setTimeout(resolve, 80));
     }
-    await Promise.allSettled([bridge.stop("lighting"), bridge.stop("cooler"), stopTurbo]);
+    await Promise.allSettled([bridge.stop()]);
+    const restoreDeadline = Date.now() + 3000;
+    while (this.state.turbo.stage !== "idle" && Date.now() < restoreDeadline) {
+      await new Promise((resolve) => window.setTimeout(resolve, 80));
+    }
     this.cancelListener?.();
   }
 }

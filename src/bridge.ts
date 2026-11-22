@@ -27,5 +27,5 @@ export const bridge = {
   send: (service: Service, request: Request) => native
     ? invoke<void>("send_hardware", { service, request })
     : demo.send(service, request),
-  stop: (service: Service) => native ? invoke<void>("stop_hardware", { service }) : Promise.resolve(),
+  stop: () => native ? invoke<void>("stop_hardware") : Promise.resolve(),
 };

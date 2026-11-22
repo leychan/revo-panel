@@ -1,6 +1,6 @@
 use crate::linux::{drop_pkexec_privileges, emit, entries, request_line, text};
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{json, Value};
 use std::{
     fs::{File, OpenOptions},
     io::{self, Read, Seek, SeekFrom, Write},
@@ -66,12 +66,34 @@ fn power_source(supplies: &Path) -> PowerSource {
     }
 }
 
-struct Session {
+pub(crate) struct Session {
     file: File,
     restore_pending: bool,
 }
 
 impl Session {
+    pub(crate) fn open() -> io::Result<Self> {
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(Path::new("/sys").join(TURBO))?;
+        Ok(Self {
+            file,
+            restore_pending: false,
+        })
+    }
+
+    pub(crate) fn run(
+        mut self,
+        requests: mpsc::Receiver<bool>,
+        report: impl Fn(&Value) -> io::Result<()>,
+    ) -> io::Result<()> {
+        let result = monitor(&mut self, requests, Path::new(SUPPLIES), report);
+        self.restore()
+            .map_err(|error| io::Error::other(format!("恢复睿频状态失败：{error}")))?;
+        result
+    }
+
     fn read(&mut self) -> io::Result<bool> {
         self.file.seek(SeekFrom::Start(0))?;
         let mut byte = [0];
@@ -115,7 +137,7 @@ impl Session {
 
 #[derive(Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
-enum Request {
+pub(crate) enum Request {
     TurboPolicy { enabled: bool },
 }
 
@@ -130,6 +152,7 @@ fn monitor(
     session: &mut Session,
     requests: mpsc::Receiver<bool>,
     supplies: &Path,
+    report: impl Fn(&Value) -> io::Result<()>,
 ) -> io::Result<()> {
     // 主程序接到就绪消息后才允许修改，关闭认证窗口时不会留下未恢复的设置。
     let Ok(mut enabled) = requests.recv() else {
@@ -156,7 +179,7 @@ fn monitor(
             power_source: source,
         };
         if previous.as_ref() != Some(&current) {
-            emit(&json!({"turbo": current}))?;
+            report(&json!({"turbo": current}))?;
             previous = Some(current);
         }
 
@@ -177,15 +200,8 @@ fn monitor(
 }
 
 pub fn run() -> io::Result<()> {
-    let file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(Path::new("/sys").join(TURBO))?;
+    let mut session = Session::open()?;
     drop_pkexec_privileges()?;
-    let mut session = Session {
-        file,
-        restore_pending: false,
-    };
     session.read()?;
     emit(&json!({"ready": true}))?;
     let (send, requests) = mpsc::channel();
@@ -200,9 +216,5 @@ pub fn run() -> io::Result<()> {
             }
         }
     });
-    let result = monitor(&mut session, requests, Path::new(SUPPLIES));
-    session
-        .restore()
-        .map_err(|error| io::Error::other(format!("恢复睿频状态失败：{error}")))?;
-    result
+    session.run(requests, emit)
 }

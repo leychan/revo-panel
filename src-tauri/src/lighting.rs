@@ -519,55 +519,81 @@ fn apply(
     Ok(json!({"state": state(actual)}))
 }
 
+pub(crate) struct Session {
+    keyboard: Hid,
+    lightbar: Option<Hid>,
+    zones: Vec<&'static str>,
+}
+
+impl Session {
+    pub(crate) fn open() -> io::Result<Self> {
+        let keyboard = Hid::open(KEYBOARD, 1, "ITE 8291 键盘")?;
+        let lightbar = match Hid::open(LIGHTBAR, 2, "ITE 8233 机身") {
+            Ok(device) => Some(device),
+            Err(error)
+                if error.kind() == io::ErrorKind::PermissionDenied
+                    && unsafe { libc::geteuid() } != 0 =>
+            {
+                return Err(error);
+            }
+            Err(_) => None,
+        };
+        Ok(Self {
+            keyboard,
+            lightbar,
+            zones: Vec::new(),
+        })
+    }
+
+    pub(crate) fn status(&mut self) -> io::Result<Value> {
+        let initial = self.keyboard.with_lock(Hid::effect)?;
+        let (zones, probe) = chassis_probe(self.lightbar.as_ref());
+        self.zones = zones;
+        Ok(json!({"state": state(initial), "chassis_probe": probe}))
+    }
+
+    pub(crate) fn request(&self, request: Value) -> io::Result<Value> {
+        let request = serde_json::from_value(request)?;
+        apply(request, &self.keyboard, self.lightbar.as_ref(), &self.zones)
+    }
+}
+
 pub fn run(operation: Operation) -> io::Result<()> {
+    if matches!(operation, Operation::Session) {
+        let mut session = Session::open()?;
+        drop_pkexec_privileges()?;
+        emit(&session.status()?)?;
+        let mut input = io::stdin().lock();
+        while let Some(line) = request_line(&mut input)? {
+            let result = serde_json::from_slice(&line)
+                .map_err(io::Error::from)
+                .and_then(|request| session.request(request));
+            emit(&result.unwrap_or_else(|error| json!({"error": error.to_string()})))?;
+        }
+        return Ok(());
+    }
     if matches!(operation, Operation::ChassisStatus) {
         let lightbar = Hid::open(LIGHTBAR, 2, "ITE 8233 机身")?;
         drop_pkexec_privileges()?;
         return emit(&chassis_probe(Some(&lightbar)).1);
     }
     let keyboard = Hid::open(KEYBOARD, 1, "ITE 8291 键盘")?;
-    if !matches!(operation, Operation::Session) {
-        drop_pkexec_privileges()?;
-        return keyboard.with_lock(|device| {
-            let original = device.effect()?;
-            if matches!(operation, Operation::VerifyBrightness) {
-                let target = if original[4] >= 25 { 12 } else { 35 };
-                let result = device.set_brightness(target);
-                if result.is_ok() {
-                    thread::sleep(Duration::from_secs(1));
-                }
-                let restored = device.set_brightness(original[4])?;
-                result?;
-                emit(&json!({"verified": target, "restored": restored[4]}))
-            } else {
-                emit(&state(original))
-            }
-        });
-    }
-
-    let lightbar = match Hid::open(LIGHTBAR, 2, "ITE 8233 机身") {
-        Ok(device) => Some(device),
-        Err(error)
-            if error.kind() == io::ErrorKind::PermissionDenied
-                && unsafe { libc::geteuid() } != 0 =>
-        {
-            return Err(error)
-        }
-        Err(_) => None,
-    };
     drop_pkexec_privileges()?;
-    let initial = keyboard.with_lock(Hid::effect)?;
-    let (zones, probe) = chassis_probe(lightbar.as_ref());
-    emit(&json!({"state": state(initial), "chassis_probe": probe}))?;
-    let mut input = io::stdin().lock();
-    while let Some(line) = request_line(&mut input)? {
-        let result = serde_json::from_slice::<Request>(&line)
-            .map_err(io::Error::from)
-            .and_then(|request| apply(request, &keyboard, lightbar.as_ref(), &zones));
-        let reply = result.unwrap_or_else(|failure| json!({"error": failure.to_string()}));
-        emit(&reply)?;
-    }
-    Ok(())
+    keyboard.with_lock(|device| {
+        let original = device.effect()?;
+        if matches!(operation, Operation::VerifyBrightness) {
+            let target = if original[4] >= 25 { 12 } else { 35 };
+            let result = device.set_brightness(target);
+            if result.is_ok() {
+                thread::sleep(Duration::from_secs(1));
+            }
+            let restored = device.set_brightness(original[4])?;
+            result?;
+            emit(&json!({"verified": target, "restored": restored[4]}))
+        } else {
+            emit(&state(original))
+        }
+    })
 }
 
 #[cfg(test)]

@@ -1,4 +1,5 @@
 mod catalog;
+mod controls;
 mod cooler;
 mod desktop;
 mod lighting;
@@ -10,14 +11,23 @@ mod turbo;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
+    fs,
     io::{BufRead, BufReader, ErrorKind, Write},
-    process::{Child, ChildStdin, Command, ExitCode, Stdio},
-    sync::{Arc, Mutex},
+    os::unix::fs::MetadataExt,
+    path::{Path, PathBuf},
+    process::{Child, ChildStdin, ChildStdout, Command, ExitCode, Stdio},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
     thread,
 };
 use tauri::{AppHandle, Emitter, Manager, RunEvent, State};
 
-#[derive(Clone, Copy, Deserialize, Serialize)]
+const PKEXEC: &str = "/usr/bin/pkexec";
+const RESTART_REQUIRED: &str = "RevoPanel 的程序文件已被替换。请从托盘退出后重新打开。";
+
+#[derive(Clone, Copy, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 enum Service {
     Lighting,
@@ -37,13 +47,48 @@ struct Running {
     pending_auth: Option<Arc<Mutex<Child>>>,
 }
 
+impl Running {
+    fn stop(&mut self) {
+        // EOF 会结束会话。睿频助手恢复其改过的值后才退出。
+        self.stdin.take();
+        // 尚未完成的系统认证不会读取 stdin，需要一并取消。
+        if let Some(child) = self.pending_auth.take() {
+            if let Ok(mut child) = child.try_lock() {
+                let _ = child.kill();
+            }
+        }
+    }
+}
+
 type Worker = Arc<Mutex<Option<Running>>>;
+type ControlWorker = Arc<Mutex<Option<AuthorizedControls>>>;
+
+struct AuthorizedControls {
+    process: Running,
+    ready: bool,
+    services: Vec<Service>,
+}
+
+impl AuthorizedControls {
+    fn start(&mut self, service: Service) -> Result<(), String> {
+        let input = self.process.stdin.as_mut().ok_or("硬件助手正在退出")?;
+        if !self.services.contains(&service) {
+            self.services.push(service);
+        }
+        if self.ready {
+            start_control(input, service)?;
+        }
+        Ok(())
+    }
+}
 
 #[derive(Default)]
 struct Hardware {
     lighting: Worker,
     cooler: Worker,
     turbo: Worker,
+    authorized: ControlWorker,
+    closing: AtomicBool,
     system: Arc<Mutex<()>>,
 }
 
@@ -56,17 +101,18 @@ impl Hardware {
         }
     }
 
-    fn stop(&self, service: Service) {
-        if let Ok(mut slot) = self.worker(service).lock() {
-            if let Some(running) = slot.as_mut() {
-                // EOF 会结束会话。睿频助手恢复其改过的值后才退出。
-                running.stdin.take();
-                // 尚未完成的系统认证不会读取 stdin，需要一并取消。
-                if let Some(child) = running.pending_auth.take() {
-                    if let Ok(mut child) = child.try_lock() {
-                        let _ = child.kill();
-                    }
+    fn stop_all(&self) {
+        self.closing.store(true, Ordering::Release);
+        for worker in [&self.lighting, &self.cooler, &self.turbo] {
+            if let Ok(mut slot) = worker.lock() {
+                if let Some(running) = slot.as_mut() {
+                    running.stop();
                 }
+            }
+        }
+        if let Ok(mut slot) = self.authorized.lock() {
+            if let Some(running) = slot.as_mut() {
+                running.process.stop();
             }
         }
     }
@@ -99,6 +145,190 @@ async fn system_request(
     .map_err(|error| error.to_string())?
 }
 
+fn hardware_executable() -> Result<PathBuf, String> {
+    let executable =
+        std::env::current_exe().map_err(|error| format!("无法定位 RevoPanel 执行文件：{error}"))?;
+    let on_disk = fs::metadata(&executable).map_err(|error| match error.kind() {
+        ErrorKind::NotFound => RESTART_REQUIRED.to_owned(),
+        _ => format!("无法访问 RevoPanel 执行文件：{error}"),
+    })?;
+    // 托盘中的旧进程可能还活着，硬件会话必须与正在运行的桌面版本一致。
+    let running = fs::metadata("/proc/self/exe")
+        .map_err(|error| format!("无法检查运行中的 RevoPanel：{error}"))?;
+    if (on_disk.dev(), on_disk.ino()) != (running.dev(), running.ino()) {
+        return Err(RESTART_REQUIRED.to_owned());
+    }
+    Ok(executable)
+}
+
+struct SpawnedWorker {
+    process: Running,
+    stdout: ChildStdout,
+    child: Arc<Mutex<Child>>,
+    errors: thread::JoinHandle<String>,
+}
+
+fn spawn_worker(mode: &str, elevate: bool) -> Result<SpawnedWorker, String> {
+    let executable = hardware_executable()?;
+    let mut command = if elevate {
+        let mut command = Command::new(PKEXEC);
+        command.arg("--disable-internal-agent").arg(&executable);
+        command
+    } else {
+        Command::new(&executable)
+    };
+    // 同一个二进制运行独立驱动会话，仅在打开受限句柄时短暂提权。
+    command.arg(mode);
+    let mut child = command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| {
+            if error.kind() == ErrorKind::NotFound && !executable.exists() {
+                RESTART_REQUIRED.to_owned()
+            } else if elevate && error.kind() == ErrorKind::NotFound && !Path::new(PKEXEC).exists()
+            {
+                "找不到 pkexec，请安装 polkit 后重试".into()
+            } else if elevate {
+                format!("无法启动系统授权：{error}")
+            } else {
+                format!("无法启动硬件助手：{error}")
+            }
+        })?;
+    let stdout = child.stdout.take().expect("piped stdout");
+    let stderr = child.stderr.take().expect("piped stderr");
+    let stdin = child.stdin.take();
+    let child = Arc::new(Mutex::new(child));
+
+    // 持续读取 stderr，避免错误输出占满管道而阻塞硬件读回。
+    let errors = thread::spawn(move || {
+        BufReader::new(stderr)
+            .lines()
+            .map_while(Result::ok)
+            .last()
+            .unwrap_or_default()
+    });
+    Ok(SpawnedWorker {
+        process: Running {
+            stdin,
+            pending_auth: elevate.then(|| child.clone()),
+        },
+        stdout,
+        child,
+        errors,
+    })
+}
+
+fn worker_exit(child: Arc<Mutex<Child>>, errors: thread::JoinHandle<String>) -> Value {
+    let code = child
+        .lock()
+        .ok()
+        .and_then(|mut child| child.wait().ok())
+        .and_then(|status| status.code());
+    serde_json::json!({ "code": code, "detail": errors.join().unwrap_or_default() })
+}
+
+fn write_request(input: &mut ChildStdin, request: &Value) -> Result<(), String> {
+    let mut bytes = serde_json::to_vec(request).map_err(|error| error.to_string())?;
+    if bytes.len() >= 1024 {
+        return Err("硬件请求过长".into());
+    }
+    bytes.push(b'\n');
+    input.write_all(&bytes).map_err(|error| error.to_string())
+}
+
+fn start_control(input: &mut ChildStdin, service: Service) -> Result<(), String> {
+    let request = match service {
+        Service::Lighting => Value::Null,
+        Service::Turbo => serde_json::json!({"action": "turbo_policy", "enabled": true}),
+        Service::Cooler => return Err("未知的硬件操作".into()),
+    };
+    write_request(
+        input,
+        &serde_json::json!({"service": service, "request": request}),
+    )
+}
+
+fn start_authorized(
+    app: &AppHandle,
+    worker: &ControlWorker,
+    service: Service,
+    elevate: bool,
+) -> Result<bool, String> {
+    let mut slot = worker.lock().map_err(|error| error.to_string())?;
+    if let Some(running) = slot.as_mut() {
+        running.start(service)?;
+        return Ok(true);
+    }
+    if !elevate {
+        return Ok(false);
+    }
+    let SpawnedWorker {
+        process,
+        stdout,
+        child,
+        errors,
+    } = spawn_worker("--controls-session", true)?;
+    *slot = Some(AuthorizedControls {
+        process,
+        ready: false,
+        services: vec![service],
+    });
+
+    // 两项控制共享这个已授权的进程。只启用已经由桌面请求的控制。
+    let worker = worker.clone();
+    let app = app.clone();
+    thread::spawn(move || {
+        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+            let Ok(event) = serde_json::from_str::<Value>(&line) else {
+                continue;
+            };
+            if event["ready"] == true {
+                if let Ok(mut slot) = worker.lock() {
+                    if let Some(running) = slot.as_mut().filter(|running| !running.ready) {
+                        running.process.pending_auth = None;
+                        running.ready = true;
+                        if let Some(input) = running.process.stdin.as_mut() {
+                            for &service in &running.services {
+                                if start_control(input, service).is_err() {
+                                    running.process.stdin.take();
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            } else {
+                if event["kind"] == "exit" {
+                    let service = serde_json::from_value::<Service>(event["service"].clone());
+                    if let (Ok(service), Ok(mut slot)) = (service, worker.lock()) {
+                        if let Some(running) = slot.as_mut() {
+                            running.services.retain(|active| *active != service);
+                        }
+                    }
+                }
+                let _ = app.emit("hardware-event", event);
+            }
+        }
+        let detail = worker_exit(child, errors);
+        let running = worker.lock().ok().and_then(|mut slot| slot.take());
+        if let Some(running) = running {
+            for service in running.services {
+                let _ = app.emit(
+                    "hardware-event",
+                    WorkerEvent {
+                        service,
+                        kind: "exit",
+                        data: detail.clone(),
+                    },
+                );
+            }
+        }
+    });
+    Ok(true)
+}
+
 #[tauri::command]
 fn start_hardware(
     app: AppHandle,
@@ -112,9 +342,11 @@ fn start_hardware(
         Service::Cooler => return Err("水冷箱使用系统蓝牙服务，无需管理员权限".into()),
         Service::Turbo => "--turbo-session",
     };
-    let executable = std::env::current_exe().map_err(|error| error.to_string())?;
     let worker = hardware.worker(service).clone();
     let mut slot = worker.lock().map_err(|error| error.to_string())?;
+    if hardware.closing.load(Ordering::Acquire) {
+        return Err("硬件助手正在退出".into());
+    }
     if let Some(running) = slot.as_ref() {
         return if running.stdin.is_some() {
             Ok(())
@@ -123,88 +355,44 @@ fn start_hardware(
         };
     }
 
-    let mut command = if elevate {
-        let mut command = Command::new("/usr/bin/pkexec");
-        command.arg("--disable-internal-agent").arg(executable);
-        command
-    } else {
-        Command::new(executable)
-    };
-    // 同一个二进制运行独立驱动会话，仅在打开受限句柄时短暂提权。
-    command.arg(mode);
-    let mut child = command
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|error| error.to_string())?;
-    let stdout = child.stdout.take().expect("piped stdout");
-    let stderr = child.stderr.take().expect("piped stderr");
-    let stdin = child.stdin.take();
-    let child = Arc::new(Mutex::new(child));
-    *slot = Some(Running {
-        stdin,
-        pending_auth: elevate.then(|| child.clone()),
-    });
-    drop(slot);
+    if service != Service::Cooler && start_authorized(&app, &hardware.authorized, service, elevate)?
+    {
+        return Ok(());
+    }
 
-    // 持续读取 stderr，避免错误输出占满管道而阻塞蓝牙通知和 HID 读回。
-    let errors = thread::spawn(move || {
-        BufReader::new(stderr)
-            .lines()
-            .map_while(Result::ok)
-            .last()
-            .unwrap_or_default()
-    });
+    let SpawnedWorker {
+        process,
+        stdout,
+        child,
+        errors,
+    } = spawn_worker(mode, false)?;
+    *slot = Some(process);
+    drop(slot);
     thread::spawn(move || {
-        let mut awaiting_auth = elevate;
         for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-            let event = match serde_json::from_str(&line) {
-                Ok(data) => WorkerEvent {
-                    service,
-                    kind: "message",
-                    data,
-                },
-                Err(_) => WorkerEvent {
-                    service,
-                    kind: "message",
-                    data: serde_json::json!({"error": "无法解析设备回复"}),
-                },
-            };
-            if matches!(service, Service::Turbo) && event.data["ready"] == true {
-                awaiting_auth = false;
+            let data = serde_json::from_str::<Value>(&line)
+                .unwrap_or_else(|_| serde_json::json!({"error": "无法解析设备回复"}));
+            if service == Service::Turbo && data["ready"] == true {
                 if let Ok(mut slot) = worker.lock() {
-                    if let Some(running) = slot.as_mut() {
-                        // 先清除认证中的标记，再允许助手写入，确保停止时能让它恢复睿频。
-                        running.pending_auth = None;
-                        if let Some(input) = running.stdin.as_mut() {
-                            if input
-                                .write_all(b"{\"action\":\"turbo_policy\",\"enabled\":true}\n")
-                                .is_err()
-                            {
-                                running.stdin.take();
-                            }
-                        }
+                    if let Some(input) = slot.as_mut().and_then(|running| running.stdin.as_mut()) {
+                        let _ = write_request(
+                            input,
+                            &serde_json::json!({"action": "turbo_policy", "enabled": true}),
+                        );
                     }
                 }
                 continue;
             }
-            if awaiting_auth && event.data.get("state").is_some() {
-                awaiting_auth = false;
-                if let Ok(mut slot) = worker.lock() {
-                    if let Some(running) = slot.as_mut() {
-                        running.pending_auth = None;
-                    }
-                }
-            }
-            let _ = app.emit("hardware-event", event);
+            let _ = app.emit(
+                "hardware-event",
+                WorkerEvent {
+                    service,
+                    kind: "message",
+                    data,
+                },
+            );
         }
-        let code = child
-            .lock()
-            .ok()
-            .and_then(|mut child| child.wait().ok())
-            .and_then(|status| status.code());
-        let detail = errors.join().unwrap_or_default();
+        let data = worker_exit(child, errors);
         if let Ok(mut slot) = worker.lock() {
             *slot = None;
         }
@@ -213,7 +401,7 @@ fn start_hardware(
             WorkerEvent {
                 service,
                 kind: "exit",
-                data: serde_json::json!({ "code": code, "detail": detail }),
+                data,
             },
         );
     });
@@ -241,25 +429,35 @@ fn send_hardware(
     if !allowed {
         return Err("未知的硬件操作".into());
     }
-    let mut bytes = serde_json::to_vec(&request).map_err(|error| error.to_string())?;
-    if bytes.len() >= 1024 {
-        return Err("硬件请求过长".into());
-    }
-    bytes.push(b'\n');
     let mut slot = hardware
         .worker(service)
         .lock()
         .map_err(|error| error.to_string())?;
-    let input = slot
-        .as_mut()
-        .and_then(|running| running.stdin.as_mut())
-        .ok_or_else(|| "硬件助手未连接".to_string())?;
-    input.write_all(&bytes).map_err(|error| error.to_string())
+    if let Some(input) = slot.as_mut().and_then(|running| running.stdin.as_mut()) {
+        return write_request(input, &request);
+    }
+    if service != Service::Cooler {
+        let mut slot = hardware
+            .authorized
+            .lock()
+            .map_err(|error| error.to_string())?;
+        if let Some(input) = slot
+            .as_mut()
+            .filter(|running| running.ready && running.services.contains(&service))
+            .and_then(|running| running.process.stdin.as_mut())
+        {
+            return write_request(
+                input,
+                &serde_json::json!({"service": service, "request": request}),
+            );
+        }
+    }
+    Err("硬件助手未连接".into())
 }
 
 #[tauri::command]
-fn stop_hardware(hardware: State<'_, Hardware>, service: Service) {
-    hardware.stop(service);
+fn stop_hardware(hardware: State<'_, Hardware>) {
+    hardware.stop_all();
 }
 
 fn command_line() -> Option<ExitCode> {
@@ -302,6 +500,7 @@ fn command_line() -> Option<ExitCode> {
         result.and_then(|value| linux::emit(&value).map_err(|error| error.to_string()))
     };
     let result = match argument.to_str() {
+        Some("--controls-session") => controls::run().map_err(|error| error.to_string()),
         Some("--cooler-session") => cooler::run(false),
         Some("--cooler-list") => cooler::run(true),
         Some("--telemetry") => print(Ok(telemetry::snapshot())),
@@ -369,9 +568,7 @@ fn main() -> ExitCode {
         .run(|app, event| {
             if let RunEvent::Exit = event {
                 let hardware = app.state::<Hardware>();
-                hardware.stop(Service::Lighting);
-                hardware.stop(Service::Cooler);
-                hardware.stop(Service::Turbo);
+                hardware.stop_all();
             }
         });
     ExitCode::SUCCESS

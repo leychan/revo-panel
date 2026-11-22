@@ -78,7 +78,7 @@ function App() {
         setUpdated(now);
         setTelemetry(result);
         setError("");
-        hardware.discoverLighting(result);
+        hardware.discoverControls(result);
       } catch (failure) {
         if (!stopped) {
           setDischargeSamples([]);

@@ -24,7 +24,7 @@ All installers are available on the [GitHub Releases page](https://github.com/le
 
 Keyboard and chassis lighting were tested with ITE devices `048d:600b` and `048d:7001`. The front light bar is supported on the tested machine. Availability of the lid logo, internal fan controls, and battery charge limits depends on the model and the interfaces exposed by its Linux drivers.
 
-KDE-specific controls use KScreen and KWin. Bluetooth cooling uses BlueZ. Lighting and turbo control may prompt for authorization when first used in a session.
+KDE-specific controls use KScreen and KWin. Bluetooth cooling uses BlueZ. RevoPanel remembers the battery turbo preference. Lighting and turbo control share one authorization per app session when required.
 
 ## Build from source
 
@@ -39,7 +39,7 @@ Use `pnpm dev` for a browser preview with sample data. Use `revo-panel --help` t
 
 ## Releases and AUR
 
-The [Linux packaging workflow](.github/workflows/package-linux.yml) builds x86_64 AppImage, Debian, and Arch packages. A version tag such as `v0.1.1` publishes them to GitHub Releases. Stable releases can also update the AUR package when the repository has the `AUR_SSH_PRIVATE_KEY` secret and the associated AUR account is verified. To retry an AUR publication, run the workflow on the default branch with `aur_release_tag` set to an existing release tag.
+The [Linux packaging workflow](.github/workflows/package-linux.yml) builds x86_64 AppImage, Debian, and Arch packages. A version tag such as `v0.1.2` publishes them to GitHub Releases. Stable releases can also update the AUR package when the repository has the `AUR_SSH_PRIVATE_KEY` secret and the associated AUR account is verified. To retry an AUR publication, run the workflow on the default branch with `aur_release_tag` set to an existing release tag.
 
 ## License and credits
 

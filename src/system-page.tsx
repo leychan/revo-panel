@@ -43,7 +43,7 @@ export function SystemPage({ appearancePanel, turbo, turboRestricted, setTurboPo
   useEffect(() => { void run({ action: "read" }); }, [run]);
 
   const power = actual?.power;
-  const turboEnabled = turbo.actual?.enabled ?? false;
+  const turboEnabled = turbo.actual?.enabled ?? turbo.preferred;
   const restricted = turboEnabled ? turbo.actual?.restricted ?? turboRestricted : turboRestricted;
   const display = actual?.display;
   const touchpad = actual?.touchpad;

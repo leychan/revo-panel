@@ -24,7 +24,7 @@ RevoPanel 是面向机械革命笔记本的 Linux 桌面控制台。首台验证
 
 键盘和机身灯光已在 ITE `048d:600b`、`048d:7001` 设备上测试，验证机支持前灯条。A 面徽标、内置风扇控制和电池限充取决于机型与 Linux 驱动提供的接口。
 
-KDE 功能使用 KScreen 和 KWin。水冷箱连接依赖 BlueZ。灯光和睿频控制在会话内首次使用时可能需要系统授权。
+KDE 功能使用 KScreen 和 KWin。水冷箱连接依赖 BlueZ。电池供电时的睿频限制会记住上次选择，灯光和睿频控制在同一次运行中共用一次系统授权。
 
 ## 源码构建
 
@@ -39,7 +39,7 @@ pnpm tauri dev
 
 ## GitHub 发布与 AUR
 
-[打包工作流](.github/workflows/package-linux.yml) 生成 x86_64 的 AppImage、Debian 和 Arch 安装包。推送 `v0.1.1` 这样的版本标签后，安装包会发布到 GitHub Releases。公开仓库配置 `AUR_SSH_PRIVATE_KEY` 且对应的 AUR 账号已验证时，稳定版本也会更新 AUR。补发 AUR 时，在默认分支手动运行工作流，并将已有 Release 的标签填入 `aur_release_tag`。
+[打包工作流](.github/workflows/package-linux.yml) 生成 x86_64 的 AppImage、Debian 和 Arch 安装包。推送 `v0.1.2` 这样的版本标签后，安装包会发布到 GitHub Releases。公开仓库配置 `AUR_SSH_PRIVATE_KEY` 且对应的 AUR 账号已验证时，稳定版本也会更新 AUR。补发 AUR 时，在默认分支手动运行工作流，并将已有 Release 的标签填入 `aur_release_tag`。
 
 ## 许可证与致谢
 
