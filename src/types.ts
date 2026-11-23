@@ -73,6 +73,8 @@ export interface LightReading {
   brightness: number;
   powered: boolean;
   mode: number;
+  speed: number;
+  direction: number;
 }
 
 export interface ChassisProbe {

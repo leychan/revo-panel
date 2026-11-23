@@ -372,7 +372,10 @@ fn hex(bytes: &[u8]) -> String {
 }
 
 fn state(effect: EffectState) -> Value {
-    json!({"brightness": effect[4], "mode": effect[2], "powered": effect[1] == POWER_ON, "parameters": hex(&effect)})
+    json!({
+        "brightness": effect[4], "mode": effect[2], "powered": effect[1] == POWER_ON,
+        "speed": effect[3], "direction": effect[6], "parameters": hex(&effect)
+    })
 }
 
 fn chassis_probe(lightbar: Option<&Hid>) -> (Vec<&'static str>, Value) {
@@ -498,7 +501,6 @@ fn apply(
         .map(|state| json!({"chassis": state}));
     }
     let actual = keyboard.with_lock(|device| match request {
-        Request::Status => device.effect(),
         Request::Brightness { level } => device.set_brightness(level),
         Request::Effect {
             name,
@@ -514,7 +516,7 @@ fn apply(
                 .ok_or_else(|| error("无效的灯效、速度或方向"))?;
             device.set_effect(effect, rgb(&color).map_err(error)?, speed, direction)
         }
-        Request::Chassis { .. } => unreachable!(),
+        Request::Status | Request::Chassis { .. } => unreachable!(),
     })?;
     Ok(json!({"state": state(actual)}))
 }
@@ -552,9 +554,12 @@ impl Session {
         Ok(json!({"state": state(initial), "chassis_probe": probe}))
     }
 
-    pub(crate) fn request(&self, request: Value) -> io::Result<Value> {
-        let request = serde_json::from_value(request)?;
-        apply(request, &self.keyboard, self.lightbar.as_ref(), &self.zones)
+    pub(crate) fn request(&mut self, request: Value) -> io::Result<Value> {
+        match serde_json::from_value(request)? {
+            // 刷新与启动使用同一条读取路径，同时更新键盘读数和机身通道。
+            Request::Status => self.status(),
+            request => apply(request, &self.keyboard, self.lightbar.as_ref(), &self.zones),
+        }
     }
 }
 

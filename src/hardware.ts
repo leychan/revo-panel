@@ -52,12 +52,30 @@ class CommandQueue {
 }
 
 const effect = (brightness: number): Effect => ({ brightness, color: "#32D4FF", direction: 1, speed: 5, name: "static" });
+const chassisSettingsKey = "revo-panel.chassis-last-sent.v1";
+const chassisDefaultBrightness = 60;
 const turboPreferenceKey = "revo-panel.turbo-on-battery.v1";
 const controlAuthorization = "请在系统窗口中授权本次运行的灯控和睿频控制";
 
 function savedTurboPolicy() {
   try { return localStorage.getItem(turboPreferenceKey) === "true"; }
   catch { return false; }
+}
+
+function savedChassisSettings() {
+  const saved: Record<string, Effect> = {};
+  try {
+    const values = JSON.parse(localStorage.getItem(chassisSettingsKey) ?? "null") as Record<string, Partial<Effect>> | null;
+    for (const zone of ["front", "logo", "rear"]) {
+      const value = values?.[zone];
+      if (value && typeof value.name === "string" && typeof value.brightness === "number" && Number.isInteger(value.brightness)
+        && value.brightness >= 0 && value.brightness <= 100 && typeof value.speed === "number" && Number.isInteger(value.speed)
+        && value.speed >= 1 && value.speed <= 10 && typeof value.color === "string" && /^#[\da-f]{6}$/i.test(value.color)) {
+        saved[zone] = { ...effect(value.brightness), name: value.name, speed: value.speed, color: value.color };
+      }
+    }
+  } catch { /* 记录缺失或损坏时仍可手动调节。 */ }
+  return saved;
 }
 
 interface Lighting {
@@ -111,13 +129,16 @@ export class HardwareController {
   private retryTimer = 0;
   private lightQueue = new CommandQueue((request) => this.send("lighting", request));
   private coolerQueue = new CommandQueue((request) => this.send("cooler", request));
+  private lastChassis = savedChassisSettings();
   private state: State = {
     catalog: null,
     turbo: { stage: "idle", busy: false, actual: null, preferred: savedTurboPolicy(), feedback: "" },
     lighting: {
       stage: "idle", feedback: "正在识别灯控设备", busy: false, actual: null,
       keyboard: effect(25), probe: { zones: [], status: "pending" },
-      chassis: { front: effect(60), logo: effect(60), rear: effect(60) }, zoneFeedback: {},
+      chassis: { front: effect(chassisDefaultBrightness), logo: effect(chassisDefaultBrightness),
+        rear: effect(chassisDefaultBrightness), ...this.lastChassis },
+      zoneFeedback: Object.fromEntries(Object.keys(this.lastChassis).map((zone) => [zone, "上次由 RevoPanel 发送"])),
     },
     cooler: {
       connected: false, automatic: true, pending: null, feedback: "正在查找水冷箱", devices: {}, selected: "",
@@ -220,7 +241,7 @@ export class HardwareController {
   };
 
   readLighting = () => {
-    if (this.state.lighting.stage === "ready" && this.lightQueue.idle) this.lightQueue.send({ action: "status" });
+    if (!this.closing && this.state.lighting.stage === "ready" && this.lightQueue.idle) this.lightQueue.send({ action: "status" });
   };
 
   setKeyboard = (changes: Partial<Effect>) => {
@@ -239,6 +260,7 @@ export class HardwareController {
     const { stage, chassis, probe, zoneFeedback } = this.state.lighting;
     if (stage !== "ready" || !probe.zones.includes(zone) || this.closing) return;
     const next = { ...chassis[zone], ...changes };
+    if (changes.name && changes.name !== "off" && next.brightness === 0) next.brightness = chassisDefaultBrightness;
     this.lighting({ chassis: { ...chassis, [zone]: next }, zoneFeedback: { ...zoneFeedback, [zone]: "等待发送" } });
     this.lightQueue.schedule(zone, { action: "chassis", zone, ...next });
   };
@@ -340,7 +362,7 @@ export class HardwareController {
       void bridge.start("lighting", true).catch((error: unknown) => this.lighting({ stage: "idle", feedback: String(error) }));
     } else {
       this.lightQueue.clear();
-      this.lighting({ stage: "idle", busy: false, probe: { zones: [], status: "disconnected" },
+      this.lighting({ stage: "idle", busy: false, actual: null, probe: { zones: [], status: "disconnected" },
         feedback: data.code === 126 ? "已取消灯控授权" : data.detail || "灯控连接已断开" });
     }
   }
@@ -366,8 +388,10 @@ export class HardwareController {
 
   private syncLight(actual: LightReading) {
     const known = actual.powered ? this.state.catalog?.keyboard.find(({ code }) => code === actual.mode)?.id : "off";
-    this.lighting({ keyboard: { ...this.state.lighting.keyboard, brightness: actual.brightness,
-      name: known ?? this.state.lighting.keyboard.name } });
+    const keyboard = { ...this.state.lighting.keyboard, brightness: actual.brightness, name: known ?? "" };
+    if (actual.speed >= 1 && actual.speed <= 10) keyboard.speed = actual.speed;
+    if (known === "wave" && actual.direction >= 1 && actual.direction <= 4) keyboard.direction = actual.direction;
+    this.lighting({ keyboard });
   }
 
   private lightReply(reply: Reply) {
@@ -375,16 +399,30 @@ export class HardwareController {
     const initial = this.state.lighting.stage !== "ready";
     this.lightQueue.finish();
     if (request?.action === "chassis") {
+      const zone = String(request.zone);
       const actual = reply.chassis;
+      if (actual && !reply.error && typeof request.speed === "number" && typeof request.color === "string") {
+        // 只记录助手确认发送的请求。重启时加载到界面，不向设备重发。
+        const settings = { ...effect(actual.brightness), name: actual.name, speed: request.speed, color: request.color };
+        this.lastChassis[zone] = settings;
+        try { localStorage.setItem(chassisSettingsKey, JSON.stringify(this.lastChassis)); } catch { /* 本次运行仍可查看。 */ }
+      }
       const mode = this.state.catalog?.chassis.find(({ id }) => id === actual?.name)?.label;
       const feedback = reply.error || (actual ? message("最近发送 · {mode} · {brightness}%",
         { mode: message(mode ?? actual.name), brightness: actual.brightness }) : "机身灯控未回复");
-      this.lighting({ zoneFeedback: { ...this.state.lighting.zoneFeedback, [String(request.zone)]: feedback }, busy: false });
+      const pending = this.lightQueue.contains(zone);
+      const { chassis, zoneFeedback } = this.state.lighting;
+      this.lighting({
+        chassis: pending ? chassis : { ...chassis, [zone]: this.lastChassis[zone] ?? effect(chassisDefaultBrightness) },
+        zoneFeedback: { ...zoneFeedback, [zone]: pending ? "等待发送" : feedback },
+        busy: false,
+      });
     } else if (reply.state) {
       this.lighting({ stage: "ready", actual: reply.state, busy: false,
         probe: reply.chassis_probe ?? this.state.lighting.probe,
         feedback: initial ? "已连接，改动自动发送" : "设备已读回设置" });
-      if (initial || (request?.action === "status" && this.lightQueue.idle)) this.syncLight(reply.state);
+      const reading = request?.action === "status" || request?.action === "brightness";
+      if (initial || (reading && this.lightQueue.idle)) this.syncLight(reply.state);
       if (request?.action === "effect" && !this.lightQueue.contains("brightness")) {
         this.lighting({ keyboard: { ...this.state.lighting.keyboard, brightness: reply.state.brightness } });
       }

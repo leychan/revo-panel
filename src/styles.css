@@ -188,6 +188,17 @@ meter::-moz-meter-bar { background: var(--accent-text); }
 .control-panel .section-heading { margin-bottom: 0; }
 .control-panel > .button { justify-self: start; }
 .control-panel .reading { margin: 2px 0; }
+.about-panel { max-width: 660px; padding: 18px; }
+.about-heading { display: flex; align-items: center; gap: 13px; margin-bottom: 16px; }
+.about-heading h2 { font-size: 17px; }
+.about-heading p { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.about-heading strong { color: var(--text); font-family: var(--mono); }
+.about-details > div { display: grid; grid-template-columns: 86px minmax(0, 1fr); align-items: baseline; gap: 12px; padding: 12px 0; border-top: 1px solid var(--line); }
+.about-details dt { color: var(--muted); }
+.about-details dd { overflow-wrap: anywhere; }
+.about-details a { color: var(--accent-text); text-underline-offset: 3px; }
+.about-details a svg { vertical-align: middle; }
+.about-details a:focus-visible { outline: 2px solid var(--mint); outline-offset: 3px; }
 .effect-options { display: grid; gap: 16px; }
 .choices { display: flex; flex-wrap: wrap; gap: 6px; }
 .choices button { border: 1px solid var(--control-border); border-radius: 9px; min-height: 34px; padding: 0 10px; color: var(--soft); background: var(--raised); font-size: 12px; }

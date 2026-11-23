@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { createRoot } from "react-dom/client";
-import { Activity, Droplets, Gauge, Keyboard, Lightbulb, Settings2, Thermometer } from "lucide-react";
+import { Activity, Droplets, Gauge, Info, Keyboard, Lightbulb, Settings2, Thermometer } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { AboutPage } from "./about-page";
 import { AppearanceSettings, useAppearance } from "./appearance";
 import { bridge, native } from "./bridge";
 import { previewHistory } from "./demo";
@@ -24,8 +25,9 @@ const pages = {
   chassis: { title: "机身灯光", label: "机身灯光", icon: Lightbulb },
   cooler: { title: "外置水冷箱", label: "水冷箱", icon: Droplets },
   system: { title: "系统设置", label: "系统设置", icon: Settings2 },
+  about: { title: "关于", label: "关于", icon: Info },
 };
-const nav = ["overview", "sensors", "keyboard", "chassis", "cooler", "system"] as const;
+const nav = ["overview", "sensors", "keyboard", "chassis", "cooler", "system", "about"] as const;
 const hardware = new HardwareController();
 
 function App() {
@@ -113,7 +115,8 @@ function App() {
 
   const chassis = telemetry?.model.board_name ?? t("等待机型信息");
   const model = telemetry?.model.product_name ?? t("本机设备");
-  const lightingSupported = telemetry?.model.board_name === "YAOSHI Series-X6AR55xY" && !!telemetry?.lighting_usb.some(({ id }) => id === "048d:600b");
+  const lightingSupported = telemetry?.model.sys_vendor === "MECHREVO"
+    && telemetry.model.board_name === "YAOSHI Series-X6AR55xY" && telemetry.lighting_usb.some(({ id }) => id === "048d:600b");
   return <div className="shell">
     <aside className="sidebar">
       <div className="brand"><span className="brand-mark"><Activity size={22} strokeWidth={2.3} /></span><div><strong>RevoPanel</strong><small>{t("Linux 控制台")}</small></div></div>
@@ -138,11 +141,12 @@ function App() {
           themeKey={themeKey} hardware={state} navigate={navigate} />}
         {page === "sensors" && <Sensors telemetry={telemetry} />}
         {page === "keyboard" && <KeyboardPage state={state} controller={hardware} supported={lightingSupported} />}
-        {page === "chassis" && <ChassisPage state={state} controller={hardware} />}
+        {page === "chassis" && <ChassisPage state={state} controller={hardware} supported={lightingSupported} />}
         {page === "cooler" && <CoolerPage state={state} controller={hardware} />}
         {page === "system" && <SystemPage appearancePanel={<AppearanceSettings appearance={appearance} change={setAppearance} />}
           turbo={state.turbo} turboRestricted={telemetry?.cpu_turbo_restricted ?? null}
           setTurboPolicy={hardware.setTurboPolicy} />}
+        {page === "about" && <AboutPage />}
         <footer className="system-footer"><span>Linux {telemetry?.kernel ?? "—"}</span><span>BIOS {telemetry?.model.bios_version ?? "—"}</span></footer>
       </div>
     </main>

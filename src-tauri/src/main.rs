@@ -131,6 +131,23 @@ fn device_catalog() -> Value {
 }
 
 #[tauri::command]
+async fn open_about_link(url: String) -> Result<(), String> {
+    // 只把关于页列出的地址交给系统浏览器。
+    match url.as_str() {
+        "https://github.com/leychan/revo-panel"
+        | "https://aur.archlinux.org/packages/revo-panel-bin"
+        | "https://github.com/leychan" => {}
+        _ => return Err("未知的项目链接".into()),
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        gio::AppInfo::launch_default_for_uri(&url, None::<&gio::AppLaunchContext>)
+            .map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
 async fn system_request(
     hardware: State<'_, Hardware>,
     request: system::Request,
@@ -554,6 +571,7 @@ fn main() -> ExitCode {
         .invoke_handler(tauri::generate_handler![
             telemetry,
             device_catalog,
+            open_about_link,
             system_request,
             start_hardware,
             send_hardware,

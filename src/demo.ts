@@ -1,4 +1,4 @@
-import type { Catalog, HardwareEvent, LightReading, Mode, Reply, Request, Service, SystemSettings, Telemetry } from "./types";
+import type { Catalog, ChassisProbe, HardwareEvent, LightReading, Mode, Reply, Request, Service, SystemSettings, Telemetry } from "./types";
 
 const modes = (rows: [string, string, number?, boolean?][]): Mode[] =>
   rows.map(([id, label, code, color]) => ({ id, label, code, color: color ?? false }));
@@ -27,7 +27,8 @@ const settings: SystemSettings = {
 };
 
 let readings = 0;
-const light: LightReading = { brightness: 36, mode: 3, powered: true };
+const light: LightReading = { brightness: 36, mode: 3, powered: true, speed: 7, direction: 2 };
+const chassisProbe: ChassisProbe = { zones: ["front"], status: "confirmed", capability: 1 };
 const devicePath = "/demo/lct22002";
 const device = { name: "CoolingSystem LCT22002", connected: false, nearby: true, known_model: true };
 let receive: ((event: HardwareEvent) => void) | undefined;
@@ -72,7 +73,7 @@ export const demo = {
     return () => { receive = undefined; };
   },
   async start(service: Service) {
-    if (service === "lighting") emit(service, { state: { ...light }, chassis_probe: { zones: ["front"], status: "confirmed", capability: 1 } });
+    if (service === "lighting") emit(service, { state: { ...light }, chassis_probe: chassisProbe });
     if (service === "turbo") emit(service, { turbo: { enabled: true, restricted: false, power_source: "external" } });
   },
   async send(service: Service, request: Request) {
@@ -85,11 +86,15 @@ export const demo = {
       if (request.action === "effect") {
         light.mode = catalog.keyboard.find((mode) => mode.id === request.name)?.code ?? 0;
         light.powered = light.mode !== 0;
+        light.speed = Number(request.speed);
+        light.direction = Number(request.direction);
       }
-      const result = request.action === "chassis"
-        ? { chassis: { name: Number(request.brightness) === 0 ? "off" : String(request.name), brightness: Number(request.brightness) } }
-        : { state: { ...light } };
-      emit(service, result);
+      if (request.action === "chassis") {
+        const off = request.name === "off" || request.brightness === 0;
+        emit(service, { chassis: { name: off ? "off" : String(request.name), brightness: off ? 0 : Number(request.brightness) } });
+      } else {
+        emit(service, { state: { ...light }, chassis_probe: request.action === "status" ? chassisProbe : undefined });
+      }
       return;
     }
     if (request.action === "list" || request.action === "scan") {

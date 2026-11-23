@@ -8,7 +8,7 @@ import type { Sample } from "./ui";
 import { useI18n } from "./i18n";
 
 export type Hardware = ReturnType<HardwareController["getSnapshot"]>;
-export type Page = "overview" | "sensors" | "keyboard" | "chassis" | "cooler" | "system";
+export type Page = "overview" | "sensors" | "keyboard" | "chassis" | "cooler" | "system" | "about";
 
 const groups: Record<string, string> = {
   coretemp: "处理器", k10temp: "处理器", zenpower: "处理器", nvme: "固态硬盘", spd5118: "内存", acpitz: "主板温区",

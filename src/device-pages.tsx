@@ -14,16 +14,30 @@ function EffectOptions({ value, modes, disabled, keyboard, onChange }: {
 }) {
   const { t } = useI18n();
   const mode = modes.find(({ id }) => id === value.name);
+  const speedOptions = speeds.some(({ id }) => id === value.speed)
+    ? speeds : [...speeds, { id: value.speed, label: t("{speed} 档", { speed: value.speed }) }].sort((a, b) => b.id - a.id);
   return <div className="effect-options">
     <Choices label="灯效模式" options={modes} value={value.name} disabled={disabled} onChange={(name) => onChange({ name })} />
-    {value.name !== "off" && value.name !== "static" && <div className="option-row">
-      <span>{t("动画速度")}</span><Choices label="动画速度" options={speeds} value={value.speed} disabled={disabled} onChange={(speed) => onChange({ speed })} compact />
+    {mode && mode.id !== "off" && mode.id !== "static" && <div className="option-row">
+      <span>{t("动画速度")}</span><Choices label="动画速度" options={speedOptions} value={value.speed} disabled={disabled} onChange={(speed) => onChange({ speed })} compact />
     </div>}
     {keyboard && value.name === "wave" && <div className="option-row">
       <span>{t("流光方向")}</span><Choices label="流光方向" options={directions} value={value.direction} disabled={disabled} onChange={(direction) => onChange({ direction })} compact />
     </div>}
     {mode?.color && <div className="option-row"><span>{t("颜色")}</span><ColorField title="灯光颜色" value={value.color} disabled={disabled} onChange={(color) => onChange({ color })} /></div>}
+    {keyboard && mode?.color && <p className="context-note">{t("设备无法回读当前颜色。")}</p>}
   </div>;
+}
+
+function LightingAction({ lighting, controller, supported, label }: {
+  lighting: Hardware["lighting"]; controller: HardwareController; supported: boolean; label: string;
+}) {
+  const { t } = useI18n();
+  if (lighting.stage === "ready") {
+    return <button className="button secondary" disabled={lighting.busy} onClick={controller.readLighting}><RefreshCw size={15} /> {t(label)}</button>;
+  }
+  if (!supported) return null;
+  return <button className="button primary" disabled={lighting.stage !== "idle"} onClick={() => void controller.connectLighting()}>{t("连接灯控")}</button>;
 }
 
 export function KeyboardPage({ state, controller, supported }: { state: Hardware; controller: HardwareController; supported: boolean }) {
@@ -39,8 +53,7 @@ export function KeyboardPage({ state, controller, supported }: { state: Hardware
       <div><h2>{t("ITE 8291 键盘")}</h2><p>{t(lighting.feedback)}</p></div>
       <div className="header-actions">
         <Status tone={ready ? "good" : "quiet"}>{ready ? t("已连接") : lighting.stage === "authorizing" ? t("等待认证") : t("等待设备")}</Status>
-        {ready ? <button className="button secondary" disabled={lighting.busy} onClick={controller.readLighting}><RefreshCw size={15} /> {t("读取灯光")}</button>
-          : supported && <button className="button primary" disabled={lighting.stage !== "idle"} onClick={() => void controller.connectLighting()}>{t("连接灯控")}</button>}
+        <LightingAction lighting={lighting} controller={controller} supported={supported} label="读取灯光" />
       </div>
     </section>
     <div className="detail-grid">
@@ -59,24 +72,31 @@ export function KeyboardPage({ state, controller, supported }: { state: Hardware
   </div>;
 }
 
-export function ChassisPage({ state, controller }: { state: Hardware; controller: HardwareController }) {
+export function ChassisPage({ state, controller, supported }: { state: Hardware; controller: HardwareController; supported: boolean }) {
   const { t } = useI18n();
   const { lighting, catalog } = state;
+  const ready = lighting.stage === "ready";
   const available = lighting.probe.zones;
   const zoneLabels = catalog?.zones ?? { front: "前灯条", logo: "A 面徽标", rear: "出风口灯" };
   const reason = lighting.probe.status === "confirmed" ? t("ITE 8233 能力码 {capability} 未报告徽标通道。主板徽标驱动尚未接入。", { capability: lighting.probe.capability })
     : lighting.probe.status === "unconfirmed" ? t("还未读到有效的徽标通道报告。") : t("等待灯控连接后检测徽标。");
   return <div className="page-stack">
     <section className="panel device-header"><span className="device-emblem"><Lightbulb size={25} /></span>
-      <div><h2>{t("机身灯光分区")}</h2><p>{t("ITE 8233 · 与键盘共用灯控会话")}</p></div>
-      <div className="header-actions"><Status tone={available.length ? "good" : "quiet"}>{available.length ? t("{count} 个可用通道", { count: available.length }) : t("等待通道")}</Status></div>
+      <div><h2>{t("机身灯光分区")}</h2><p>{t(ready && available.length
+        ? "设备无法回读机身灯光设置。页面显示上次成功发送的设置，暂无记录的灯区显示调节初始值。"
+        : lighting.feedback)}</p></div>
+      <div className="header-actions">
+        <Status tone={available.length ? "good" : "quiet"}>{available.length ? t("{count} 个可用通道", { count: available.length })
+          : ready ? t("无可用通道") : lighting.stage === "authorizing" ? t("等待认证") : t("等待通道")}</Status>
+        <LightingAction lighting={lighting} controller={controller} supported={supported} label="刷新灯区" />
+      </div>
     </section>
     <div className="chassis-grid">
       {Object.entries(zoneLabels).filter(([zone]) => zone === "logo" || available.includes(zone)).map(([zone, name]) => {
         const mode = lighting.chassis[zone];
         const enabled = available.includes(zone) && lighting.stage === "ready";
         return <section className="panel control-panel" key={zone}>
-          <div className="section-heading"><div><h2>{t(name)}</h2><p>{t(enabled ? lighting.zoneFeedback[zone] ?? "调整后自动发送" : "当前不可调节")}</p></div></div>
+          <div className="section-heading"><div><h2>{t(name)}</h2><p>{t(enabled ? lighting.zoneFeedback[zone] ?? "暂无应用记录" : "当前不可调节")}</p></div></div>
           {enabled ? <>
             <Slider label={t("{name}亮度", { name: t(name) })} value={mode.brightness} max={100} onChange={(brightness) => controller.setChassis(zone, { brightness })} />
             <EffectOptions value={mode} modes={catalog?.chassis ?? []} disabled={false} onChange={(changes) => controller.setChassis(zone, changes)} />
