@@ -28,11 +28,14 @@ const QUERY_STATE: u8 = 0x88;
 const QUERY_ZONES: u8 = 0xa2;
 const SET_EFFECT: u8 = 0x08;
 const SET_BRIGHTNESS: u8 = 0x09;
-const FRAME_TRANSFER: u8 = 0x12;
+const ROW_TRANSFER: u8 = 0x16;
 const SET_PALETTE: u8 = 0x14;
 const POWER_OFF: u8 = 0x01;
 const POWER_ON: u8 = 0x02;
 const EFFECT_DELAY: Duration = Duration::from_millis(250);
+const KEYBOARD_ROWS: u8 = 6;
+const KEYBOARD_COLUMNS: usize = 21;
+const OUTPUT_REPORT: usize = 2 + 3 * KEYBOARD_COLUMNS;
 const COLORS: [[u8; 3]; 8] = [
     [255, 0, 0],
     [255, 128, 0],
@@ -237,13 +240,17 @@ impl Hid {
     fn fill_keyboard(&self, color: [u8; 3], brightness: u8) -> io::Result<()> {
         self.send(&[SET_EFFECT, POWER_ON, USER_MODE, 0, brightness, 0, 0, 0])?;
         milliseconds(20);
-        self.send(&[FRAME_TRANSFER, 0, 0, 8])?;
-        let frame = rgb_frame(color);
+        let report = keyboard_row(color);
         let mut file = &self.0;
-        for _ in 0..8 {
-            // 一次 write 对应一个完整报告，短写不能继续发送剩余半帧。
-            if file.write(&frame)? != frame.len() {
-                return Err(error("键盘未接收完整的 RGB 数据包"));
+        // 使用 ITE 8291 的逐行写入协议，每行先发编号，再发该行的颜色。
+        for row in 0..KEYBOARD_ROWS {
+            self.send(&[ROW_TRANSFER, 0, row])?;
+            // 一次 write 对应一个完整报告，短写不能继续发送剩余字节。
+            if file.write(&report)? != report.len() {
+                return Err(error(format!(
+                    "键盘未接收第 {} 行的完整 RGB 数据包",
+                    row + 1
+                )));
             }
         }
         Ok(())
@@ -354,13 +361,16 @@ fn feature_report(payload: &[u8]) -> io::Result<[u8; REPORT]> {
     Ok(report)
 }
 
-fn rgb_frame(color: [u8; 3]) -> [u8; 65] {
-    // 0 为报告编号，每个像素使用 0、红、绿、蓝四字节。
-    let mut frame = [0; 65];
-    for chunk in frame[1..].as_chunks_mut::<4>().0 {
-        chunk[1..].copy_from_slice(&color);
+fn keyboard_row(color: [u8; 3]) -> [u8; OUTPUT_REPORT] {
+    // 第一个 0 是 HID 报告编号，第二个 0 是行数据的填充。之后按蓝、绿、红各写 21 字节。
+    let mut report = [0; OUTPUT_REPORT];
+    for (plane, channel) in report[2..]
+        .chunks_exact_mut(KEYBOARD_COLUMNS)
+        .zip(color.into_iter().rev())
+    {
+        plane.fill(channel);
     }
-    frame
+    report
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -614,6 +624,20 @@ mod tests {
             feature_report(&[SET_BRIGHTNESS, 2, 12]).unwrap(),
             [0, 9, 2, 12, 0, 0, 0, 0, 0]
         );
-        assert_eq!(rgb_frame([0x32, 0xd4, 0xff])[61..], [0, 0x32, 0xd4, 0xff]);
+        assert_eq!(
+            feature_report(&[ROW_TRANSFER, 0, 5]).unwrap(),
+            [0, 0x16, 0, 5, 0, 0, 0, 0, 0]
+        );
+    }
+
+    #[test]
+    fn keyboard_rows_encode_each_selected_color() {
+        for [red, green, blue] in [[0x32, 0xd4, 0xff], [0xff, 0x8d, 0xa0], [0, 0, 0]] {
+            let report = keyboard_row([red, green, blue]);
+            assert_eq!(report[..2], [0, 0]);
+            assert_eq!(report[2..23], [blue; 21]);
+            assert_eq!(report[23..44], [green; 21]);
+            assert_eq!(report[44..65], [red; 21]);
+        }
     }
 }
